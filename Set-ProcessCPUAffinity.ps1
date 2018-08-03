@@ -122,7 +122,7 @@ function Set-ProcessCPUAffinity
 
         # Create Affinity mask for the selected CPU's
         [int]$AffinityMask = 0
-        $AffinityCores | foreach { $AffinityMask += $_.CPUid }
+        $AffinityCores | ForEach-Object { $AffinityMask += $_.CPUid }
 
     }
 
