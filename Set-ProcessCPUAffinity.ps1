@@ -118,7 +118,7 @@ function Set-ProcessCPUAffinity
         $Cores = $Cores | Select-Object -Unique
 
         # Filter the CPU array to the CPU's selected for affinity
-        $AffinityCores = foreach ($Core in $Cores) { $CPUs | Where-Object { $_."CPU#" -match $Core } }
+        $AffinityCores = foreach ($Core in $Cores) { $CPUs[$Core-1] | Where-Object { $_."CPU#" -match $Core } }
 
         # Create Affinity mask for the selected CPU's
         [int]$AffinityMask = 0
