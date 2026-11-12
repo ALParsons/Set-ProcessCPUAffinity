@@ -4,167 +4,140 @@
 .DESCRIPTION
     Set the Processor affinity for a running Process by specifying the CPU Cores that it can run on, and the name or PID of a Process(s).
 .SYNTAX
-    Set-ProcessCPUAffinity -Name <String[]> -Cores <Int32[]> [<CommonParameters>]
-    Set-ProcessCPUAffinity -Id <Int32[]> -Cores <Int32[]> [<CommonParameters>]
+    Set-ProcessCPUAffinity -Name <String[]> [-Cores <Int32[]>] [-PassThru] [<CommonParameters>]
+    Set-ProcessCPUAffinity -Id <Int32[]> [-Cores <Int32[]>] [-PassThru] [<CommonParameters>]
+    Set-ProcessCPUAffinity -Process <Process[]> [-Cores <Int32[]>] [-PassThru] [<CommonParameters>]
 .PARAMETER ID
    The Process ID for the Process(es) to Set Affinity.
 .PARAMETER Name
     The Process Name for the Process(es) to Set Affinity.
+.PARAMETER Process
+    Process objects from the pipeline or an existing array of System.Diagnostics.Process objects.
 .PARAMETER Cores
     The cores that are allowed to run the Process.
     Separate each chosen core with a comma e.g. 1,3.
     Omit Parameter to set affinity to 100% CPU Cores.
+.PARAMETER PassThru
+    Return the updated process objects after the affinity is set.
 .EXAMPLE
-    Set-ProcessCPUAffinity -Cores 2 -PID 468
+    Set-ProcessCPUAffinity -Cores 2 -Id 468
 .EXAMPLE
     Set-ProcessCPUAffinity -Cores 1,3,4 -Name "Chrome"
 .EXAMPLE
     Set-ProcessCPUAffinity -Name "Explorer"
+.EXAMPLE
+    Get-Process -Name chrome | Set-ProcessCPUAffinity -Cores 1,2 -PassThru
 #>
 function Set-ProcessCPUAffinity
 {
-    [CmdletBinding()]
-    [Alias()]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
+    [Alias('Set-ProcessAffinity')]
     Param
     (
-        [Parameter(Mandatory=$true,ValueFromPipeline=$true,ValueFromPipelineByPropertyName=$true,ParameterSetName="Id")]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, ParameterSetName = 'Id')]
+        [Alias('PID')]
         [int[]]
-        $Id
+        $Id,
+
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, ParameterSetName = 'Name')]
+        [string[]]
+        $Name,
+
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'Process')]
+        [System.Diagnostics.Process[]]
+        $Process,
+
+        [Parameter()]
+        [int[]]
+        $Cores,
+
+        [switch]
+        $PassThru
     )
-
-    DynamicParam
-    {
-            # Set the dynamic parameters' name
-            $ParameterName1 = 'Cores'
-            $ParameterName2 = 'Name'
-
-            # Create the dictionary
-            $RuntimeParameterDictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
-
-            # Create the collection of attributes
-            $AttributeCollection1 = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
-            $AttributeCollection2 = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
-
-            # Create and set the parameters' attributes
-            $ParameterAttribute1 = New-Object System.Management.Automation.ParameterAttribute
-            $ParameterAttribute1.Mandatory = $false
-
-            $ParameterAttribute2 = New-Object System.Management.Automation.ParameterAttribute
-            $ParameterAttribute2.Mandatory = $true
-            $ParameterAttribute2.ParameterSetName = "Name"
-
-            # Add the attributes to the attributes collection
-            $AttributeCollection1.Add($ParameterAttribute1)
-            $AttributeCollection2.Add($ParameterAttribute2)
-
-            # Generate and set the ValidateSet
-            [int[]]$arrCPUSet = $null
-            [int[]]$arrCPUSet += (1..$env:NUMBER_OF_PROCESSORS)
-            $ValidateSetAttribute1 = New-Object System.Management.Automation.ValidateSetAttribute($arrCPUSet)
-
-            [string[]]$arrNameSet = $null
-            [string[]]$arrNameSet += (Get-Process).Name | Select-Object -Unique
-            $ValidateSetAttribute2 = New-Object System.Management.Automation.ValidateSetAttribute($arrNameSet)
-
-            # Add the ValidateSet to the attributes collection
-            $AttributeCollection1.Add($ValidateSetAttribute1)
-            $AttributeCollection2.Add($ValidateSetAttribute2)
-
-            # Create and return the dynamic parameter
-            $RuntimeParameter1 = New-Object System.Management.Automation.RuntimeDefinedParameter($ParameterName1, [int[]], $AttributeCollection1)
-            $RuntimeParameter2 = New-Object System.Management.Automation.RuntimeDefinedParameter($ParameterName2, [string[]], $AttributeCollection2)
-
-            $RuntimeParameterDictionary.Add($ParameterName1, $RuntimeParameter1)
-            $RuntimeParameterDictionary.Add($ParameterName2, $RuntimeParameter2)
-
-
-            return $RuntimeParameterDictionary
-    }
 
     begin
     {
-        # Bind the parameter to a friendly variable
-        $Cores = $PsBoundParameters['Cores']
-        $Name  = IF ($null -ne $PsBoundParameters['Name']) { $PsBoundParameters['Name'] }
+        $LogicalProcessors = [Math]::Max(1, [int]$env:NUMBER_OF_PROCESSORS)
 
-        [int]$LogicalProcessors = $env:NUMBER_OF_PROCESSORS
-
-        # Instantiate CPU counters & array
-        [int]$CPUid = 1
-        [int]$Counter = 1
-        [array]$CPUs = @()
-
-
-        # Build CPU array for filtering the chosen CPU's Affinity mask
-        Do
+        if ($null -eq $Cores -or $Cores.Count -eq 0)
         {
-            # Create a CPU Object to add to the CPU array
-            $CPUObj = New-Object -TypeName PSCustomObject
-            $CPUObj | Add-Member -Name "CPUid" -MemberType NoteProperty -Value $CPUid
-            $CPUObj | Add-Member -Name "CPU#" -MemberType NoteProperty -Value "CPU$Counter"
+            $Cores = 1..$LogicalProcessors
+        }
 
-            # Add CPU to array
-            $CPUs += $CPUObj
+        $Cores = @($Cores | Select-Object -Unique | Sort-Object)
 
-            # Increment CPU object counters
-            $CPUid = $CPUid * 2 ; $Counter++
+        foreach ($Core in $Cores)
+        {
+            if ($Core -lt 1 -or $Core -gt $LogicalProcessors)
+            {
+                throw "Core '$Core' is outside the valid range 1..$LogicalProcessors."
+            }
+        }
 
-        } Until ($Counter -gt $LogicalProcessors)
+        if ($LogicalProcessors -gt 63)
+        {
+            throw "This function supports a maximum of 63 logical processors in a single affinity mask."
+        }
 
-        # If Cores is ommited, declare all cores for affinity
-        IF ($null -eq $Cores) {[string[]]$Cores = (1..$env:NUMBER_OF_PROCESSORS)}
+        [UInt64]$AffinityMask = 0
+        foreach ($Core in $Cores)
+        {
+            $AffinityMask = [UInt64]($AffinityMask -bor ([UInt64]1 -shl ($Core - 1)))
+        }
 
-        # Remove possible repeated CPU ID's
-        $Cores = $Cores | Select-Object -Unique
-
-        # Filter the CPU array to the CPU's selected for affinity
-        $AffinityCores = foreach ($Core in $Cores) { $CPUs[$Core-1] | Where-Object { $_."CPU#" -match $Core } }
-
-        # Create Affinity mask for the selected CPU's
-        [int]$AffinityMask = 0
-        $AffinityCores | ForEach-Object { $AffinityMask += $_.CPUid }
-
+        $AffinityMaskPtr = [System.IntPtr]$AffinityMask
     }
 
     Process
     {
-
-        # Set Process collection and Process Identifier (ID vs. Name)
-        [String[]]$Processes = IF ($null -ne $Name) { $Name ; $Identifier = "Name" } Else { $Id ; $Identifier = "Id" }
-
-
-        # Switch to code block for the selected Process Identifier
-        # Set CPU affinity mask for each selected Process
         [System.Diagnostics.Process[]]$ResultSet = @()
-        Switch($Identifier)
+
+        switch ($PSCmdlet.ParameterSetName)
         {
-            Name
+            'Id'
             {
-                $Processes = $Processes | Select-Object -Unique
-                Foreach ($Process in $Processes)
+                foreach ($ProcID in $Id)
                 {
-                    Foreach ($ProcID in (Get-Process -Name $Process).Id)
+                    $CurrentProcess = Get-Process -Id $ProcID -ErrorAction Stop
+                    if ($PSCmdlet.ShouldProcess("$($CurrentProcess.ProcessName) (PID $($CurrentProcess.Id))", "Set processor affinity to cores $($Cores -join ', ' )"))
                     {
-                        (Get-Process -Id $ProcID).ProcessorAffinity = $AffinityMask
-                        $ResultSet += Get-Process -Id $ProcID
+                        $CurrentProcess.ProcessorAffinity = $AffinityMaskPtr
+                        $ResultSet += $CurrentProcess
                     }
-
                 }
             }
 
-            Id
+            'Name'
             {
-                Foreach ($Process in $Processes)
+                foreach ($ProcessName in ($Name | Select-Object -Unique))
                 {
-                    (Get-Process -Id $Process).ProcessorAffinity = $AffinityMask
-                    $ResultSet += Get-Process -Id $Process
+                    foreach ($CurrentProcess in (Get-Process -Name $ProcessName -ErrorAction Stop))
+                    {
+                        if ($PSCmdlet.ShouldProcess("$($CurrentProcess.ProcessName) (PID $($CurrentProcess.Id))", "Set processor affinity to cores $($Cores -join ', ' )"))
+                        {
+                            $CurrentProcess.ProcessorAffinity = $AffinityMaskPtr
+                            $ResultSet += $CurrentProcess
+                        }
+                    }
                 }
             }
 
+            'Process'
+            {
+                foreach ($CurrentProcess in $Process)
+                {
+                    if ($PSCmdlet.ShouldProcess("$($CurrentProcess.ProcessName) (PID $($CurrentProcess.Id))", "Set processor affinity to cores $($Cores -join ', ' )"))
+                    {
+                        $CurrentProcess.ProcessorAffinity = $AffinityMaskPtr
+                        $ResultSet += $CurrentProcess
+                    }
+                }
+            }
         }
 
-        # Return array of System.Diagnostic.Process objects to the pipeline
-        $ResultSet
+        if ($PassThru)
+        {
+            $ResultSet
+        }
     }
-
 }
